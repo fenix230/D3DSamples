@@ -207,14 +207,13 @@
 cbuffer cbConstants : register( b0 )
 {
     matrix  g_mWorldViewProj        : packoffset( c0 );
-    matrix  g_mWorldViewProjLight   : packoffset( c4 );
-    float3  g_MaterialAmbientColor  : packoffset( c8 );
-    float3  g_MaterialDiffuseColor  : packoffset( c9 );
-    float3  g_vLightPos             : packoffset( c10 );        // Light position in model space
-    float3  g_LightDiffuse          : packoffset( c11 );
-    float   g_fInvRandomRotSize     : packoffset( c12.x );
-    float   g_fInvShadowMapSize     : packoffset( c12.y );
-    float   g_fFilterWidth          : packoffset( c12.z );
+    float3  g_MaterialAmbientColor  : packoffset( c4 );
+    float3  g_MaterialDiffuseColor  : packoffset( c5 );
+    float3  g_vLightPos             : packoffset( c6 );        // Light position in model space
+    float3  g_LightDiffuse          : packoffset( c7 );
+    float   g_fInvRandomRotSize     : packoffset( c8.x );
+    float   g_fInvShadowMapSize     : packoffset( c8.y );
+    float   g_fFilterWidth          : packoffset( c8.z );
 };
 
 
@@ -222,8 +221,6 @@ cbuffer cbConstants : register( b0 )
 // Textures and Samplers
 //-----------------------------------------------------------------------------------------
 Texture2D   g_txDiffuse                     : register( t0 );
-Texture2D   g_txShadowMap                   : register( t1 );
-Texture2D   g_txRandomRot                   : register( t2 );
 
 SamplerState g_samPointMirror               : register( s0 );
 SamplerState g_samLinearWrap                : register( s1 );
@@ -247,12 +244,6 @@ struct VS_OUTPUT
     float2 TextureUV            : TEXCOORD0;   // vertex texture coords
 };
 
-// Vertex shader for shadowmap rendering
-float4 ShadowMapVS( VS_INPUT input ) : SV_POSITION
-{
-    return mul( g_mWorldViewProjLight, input.Position );
-}
-
 //--------------------------------------------------------------------------------------
 // This shader computes standard transform and lighting
 //--------------------------------------------------------------------------------------
@@ -262,7 +253,7 @@ VS_OUTPUT RenderSceneVS( VS_INPUT input )
 
     // Transform the position from object space to homogeneous projection space
     Output.Position = mul( g_mWorldViewProj, input.Position );
-    Output.PositionLightSpace = mul( g_mWorldViewProjLight, input.Position );
+    Output.PositionLightSpace = input.Position;
 
     float3 vLightDir = normalize( g_vLightPos - input.Position.xyz );
 
@@ -275,67 +266,15 @@ VS_OUTPUT RenderSceneVS( VS_INPUT input )
     return Output;    
 }
 
-// Simple jittered shadowmap filter
-
-float ShadowFilter( float2 vScreenPos, float3 vLightPos )
-{
-    // Fetch per-pixel random basis
-    float4 basis = g_txRandomRot.Sample( g_samPointMirror, vScreenPos ) * g_fFilterWidth * g_fInvShadowMapSize;
-
-    float shadow = 0;
-    
-    [unroll]
-    for (int i = 0; i<SAMPLES; i++)
-    {
-        float2 vOffset = g_vOffsets[i].xx * basis.xz + g_vOffsets[i].yy * basis.yw;
-        shadow += 1.f/SAMPLES * g_txShadowMap.SampleCmp( g_samPointCmpClamp, vLightPos.xy + vOffset, vLightPos.z );
-    }
-    
-    return shadow;
-}
-
-// Vectorized shadowmap filter, uses GatherCmpRed to fetch and filter 4 values at once
-
-float ShadowFilterGather4( float2 vScreenPos, float3 vLightPos )
-{
-    // Fetch per-pixel random basis
-    float4 basis = g_txRandomRot.Sample( g_samPointMirror, vScreenPos ) * g_fFilterWidth;   // offsets to Gather instructions are in texel space, so we scale basis by filter width here
-
-    float shadow = 0;
-    
-    [unroll]
-    for (int i = 0; i< (SAMPLES / 4); i++)
-    {
-        // Fetch and filter 4 values at once
-        int2 o0 = (int2)(g_vOffsets[i * 4 + 0].xx * basis.xz + g_vOffsets[i * 4 + 0].yy * basis.yw);
-        int2 o1 = (int2)(g_vOffsets[i * 4 + 1].xx * basis.xz + g_vOffsets[i * 4 + 1].yy * basis.yw);
-        int2 o2 = (int2)(g_vOffsets[i * 4 + 2].xx * basis.xz + g_vOffsets[i * 4 + 2].yy * basis.yw);
-        int2 o3 = (int2)(g_vOffsets[i * 4 + 3].xx * basis.xz + g_vOffsets[i * 4 + 3].yy * basis.yw);
-
-        float4 results = g_txShadowMap.GatherCmpRed( g_samPointCmpClamp, vLightPos.xy, vLightPos.z, o0, o1, o2, o3 );
-
-        shadow += 1.0/SAMPLES * (results.x + results.y + results.z + results.w);
-    }
-    
-    return shadow;
-}
-
-
-
 float4 RenderScenePS( VS_OUTPUT In ) : SV_TARGET
 { 
     // Some of these transforms should be folded into the mWorldViewProjLight matrix really, but math is so cheap in PS these days...
     
     float3 vLightPos = In.PositionLightSpace.xyz / In.PositionLightSpace.w; // project
     vLightPos.xy = vLightPos.xy * 0.5f + 0.5f;
-    vLightPos.y = 1.0f - vLightPos.y;
-#ifndef USEGATHER4                        
-    float shadow = ShadowFilter( In.Position.xy * g_fInvRandomRotSize, vLightPos );
-#else
-    float shadow = ShadowFilterGather4( In.Position.xy * g_fInvRandomRotSize, vLightPos );
-#endif    
+    vLightPos.y = 1.0f - vLightPos.y;   
     
     float3 albedo = g_txDiffuse.Sample( g_samLinearWrap, In.TextureUV ).rgb;
 
-    return  sqrt(float4(g_MaterialAmbientColor * albedo * 0.5f * float3(0.5, 0.5, 1.0) + In.Diffuse * albedo * float3(1.5, 1.25, 1.0) * shadow, 1));   
+    return  sqrt(float4(g_MaterialAmbientColor * albedo * 0.5f * float3(0.5, 0.5, 1.0) + In.Diffuse * albedo * float3(1.5, 1.25, 1.0), 1));   
 }

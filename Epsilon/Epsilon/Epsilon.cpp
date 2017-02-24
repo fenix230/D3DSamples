@@ -46,22 +46,19 @@
 // Global variables
 //--------------------------------------------------------------------------------------
 CModelViewerCamera          g_Camera;                     // A model viewing camera
-CModelViewerCamera          g_LightCamera;                // Light camera
 CDXUTDialogResourceManager  g_DialogResourceManager;      // Manager for shared resources of dialogs
 CD3DSettingsDlg             g_SettingsDlg;                // Device settings dialog
 CDXUTTextHelper*            g_pTxtHelper = NULL;
-CDXUTDialog                 g_HUD;                        // Dialog for standard controls
 CDXUTDialog                 g_SampleUI;                   // Dialog for sample specific controls
 
 // Mesh
 CDXUTSDKMesh                g_Mesh;
 
 // Direct3D 11 resources
-ID3D11VertexShader*         g_pVertexShaderShadow = NULL; // Vertex shader for shadowmap rendering
 ID3D11VertexShader*         g_pVertexShader = NULL;       // Vertex shader for main scene rendering
 ID3D11VertexShader*         g_pVertexShaderFXAA = NULL;   // Vertex shader for FXAA rendering
-ID3D11PixelShader*          g_pPixelShader;               // Pixel shader for main scene rendering
-ID3D11PixelShader*          g_pPixelShaderFXAA;           // Pixel shader for FXAA rendering
+ID3D11PixelShader*          g_pPixelShader = NULL;        // Pixel shader for main scene rendering
+ID3D11PixelShader*          g_pPixelShaderFXAA = NULL;    // Pixel shader for FXAA rendering
 
 ID3D11InputLayout*          g_pVertexLayout = NULL;       // Vertex layout object
 
@@ -107,7 +104,6 @@ ID3D11RenderTargetView*     g_pProxyTextureRTV = NULL;
 struct CB_CONSTANTS
 {
 	D3DXMATRIX  m_mWorldViewProj;
-	D3DXMATRIX  m_mWorldViewProjLight;
 	D3DXVECTOR4 m_MaterialAmbientColor;
 	D3DXVECTOR4 m_MaterialDiffuseColor;
 	D3DXVECTOR4 m_vLightPos;
@@ -234,32 +230,17 @@ int WINAPI wWinMain( HINSTANCE hInstance, HINSTANCE hPrevInstance, LPWSTR lpCmdL
 void InitApp()
 {
 	g_SettingsDlg.Init( &g_DialogResourceManager );
-	g_HUD.Init( &g_DialogResourceManager );
 	g_SampleUI.Init( &g_DialogResourceManager );
-
-	g_HUD.SetCallback( OnGUIEvent );
-
-	int iY = 30;
-	int iYo = 26;
-	g_HUD.AddButton( IDC_TOGGLEFULLSCREEN, L"Toggle full screen", 0, iY,        170, 22 );
-	g_HUD.AddButton( IDC_CHANGEDEVICE,     L"Change device (F2)", 0, iY += iYo, 170, 22, VK_F2 );
-	g_HUD.AddCheckBox( IDC_TOGGLEFXAA,     L"Toggle FXAA (F3)",   0, iY += iYo, 170, 22, true, VK_F3 );
 
 	//g_Camera.SetRotateButtons( true, false, false );
 	g_Camera.SetButtonMasks( MOUSE_LEFT_BUTTON, MOUSE_WHEEL, MOUSE_MIDDLE_BUTTON );
-	g_LightCamera.SetButtonMasks( MOUSE_RIGHT_BUTTON, 0, 0 );
 
-	g_SampleUI.SetCallback( OnGUIEvent ); iY = 10;
+	g_SampleUI.SetCallback( OnGUIEvent );
 
 	// Setup the camera's view parameters
 	D3DXVECTOR3 vecEye( 7.0f, 7.0f, -7.0f );
 	D3DXVECTOR3 vecAt ( 0.0f, 0.0f, 0.0f );
 	g_Camera.SetViewParams( &vecEye, &vecAt );
-
-	// Setup light camera's view parameters
-	D3DXVECTOR3 vecEyeLight( 9.0f, 15.0f, 9.0f );
-	D3DXVECTOR3 vecAtLight ( 0.0f, 0.0f, 0.0f );
-	g_LightCamera.SetViewParams( &vecEyeLight, &vecAtLight );
 }
 
 
@@ -428,13 +409,6 @@ HRESULT CALLBACK OnD3D11CreateDevice( ID3D11Device* pd3dDevice, const DXGI_SURFA
 	ID3DBlob* pBlob = NULL;
 
 	if (pd3dDevice->GetFeatureLevel() < D3D_FEATURE_LEVEL_11_0)
-		V_RETURN( D3DX11CompileFromFile( str, NULL, NULL, "ShadowMapVS", "vs_4_0", dwShaderFlags, 0, NULL, &pBlob, NULL, NULL ) )
-	else
-	V_RETURN( D3DX11CompileFromFile( str, NULL, NULL, "ShadowMapVS", "vs_5_0", dwShaderFlags, 0, NULL, &pBlob, NULL, NULL ) );
-	V_RETURN( pd3dDevice->CreateVertexShader( pBlob->GetBufferPointer(), pBlob->GetBufferSize(), NULL, &g_pVertexShaderShadow ) );
-	SAFE_RELEASE( pBlob );
-
-	if (pd3dDevice->GetFeatureLevel() < D3D_FEATURE_LEVEL_11_0)
 		V_RETURN( D3DX11CompileFromFile( str, NULL, NULL, "RenderSceneVS", "vs_4_0", dwShaderFlags, 0, NULL, &pBlob, NULL, NULL ) )
 	else
 	V_RETURN( D3DX11CompileFromFile( str, NULL, NULL, "RenderSceneVS", "vs_5_0", dwShaderFlags, 0, NULL, &pBlob, NULL, NULL ) );
@@ -472,7 +446,7 @@ HRESULT CALLBACK OnD3D11CreateDevice( ID3D11Device* pd3dDevice, const DXGI_SURFA
 	V_RETURN( g_Mesh.Create( pd3dDevice, L"Crypt\\Crypt.sdkmesh", true ) );
 
 
-	// Create sampler objects
+	// Create sampler objects 
 	D3D11_SAMPLER_DESC samDesc;
 
 	ZeroMemory( &samDesc, sizeof(samDesc) );
@@ -569,14 +543,8 @@ HRESULT CALLBACK OnD3D11ResizedSwapChain( ID3D11Device* pd3dDevice, IDXGISwapCha
 	g_Camera.SetProjParams( D3DX_PI / 4, fAspectRatio, 0.1f, 1000.0f );
 	g_Camera.SetWindow( pBackBufferSurfaceDesc->Width, pBackBufferSurfaceDesc->Height );
 
-	g_LightCamera.SetProjParams( D3DX_PI / 4, 1.0f, 0.1f, 1000.0f );
-	//g_Camera.SetButtonMasks( MOUSE_LEFT_BUTTON, MOUSE_WHEEL, MOUSE_MIDDLE_BUTTON );
-
-	g_HUD.SetLocation( pBackBufferSurfaceDesc->Width - 170, 0 );
-	g_HUD.SetSize( 170, 170 );
 	g_SampleUI.SetLocation( pBackBufferSurfaceDesc->Width - 170, pBackBufferSurfaceDesc->Height - 300 );
 	g_SampleUI.SetSize( 170, 300 );
-
 
 	SAFE_RELEASE( g_pProxyTexture );
 	SAFE_RELEASE( g_pProxyTextureSRV );
@@ -585,53 +553,8 @@ HRESULT CALLBACK OnD3D11ResizedSwapChain( ID3D11Device* pd3dDevice, IDXGISwapCha
 	SAFE_RELEASE( g_pCopyResolveTextureSRV );
 	FxaaIntegrateResource(pd3dDevice, pBackBufferSurfaceDesc);
 
-
 	return S_OK;
 }
-
-//--------------------------------------------------------------------------------------
-// Renders the depth only shadow map
-//--------------------------------------------------------------------------------------
-void RenderShadowMap( ID3D11Device* pd3dDevice, ID3D11DeviceContext* pd3dImmediateContext )
-{
-	D3D11_RECT oldRects[1];
-	D3D11_VIEWPORT oldVp[1];
-	UINT num = 1;
-	pd3dImmediateContext->RSGetScissorRects( &num, oldRects );
-	num = 1;
-	pd3dImmediateContext->RSGetViewports( &num, oldVp );
-
-	D3D11_RECT rects[1] = { { 0, g_uShadowMapSize, 0, g_uShadowMapSize } };
-	pd3dImmediateContext->RSSetScissorRects( 1, rects );
-
-	D3D11_VIEWPORT vp[1] = { { 0, 0, (float)g_uShadowMapSize, (float)g_uShadowMapSize, 0.0f, 1.0f } };
-	pd3dImmediateContext->RSSetViewports( 1, vp );
-
-	// Set our scene render target & keep original depth buffer
-	ID3D11RenderTargetView * pRTVs[2] = { 0, 0 };
-	pd3dImmediateContext->OMSetRenderTargets( 1, pRTVs, g_pDepthTextureDSV );
-
-	// Clear the render target
-	pd3dImmediateContext->ClearDepthStencilView( g_pDepthTextureDSV, D3D11_CLEAR_DEPTH, 1.0, 0 );
-
-	// Set the shaders
-	pd3dImmediateContext->VSSetShader( g_pVertexShaderShadow, NULL, 0 );
-	pd3dImmediateContext->PSSetShader( NULL, NULL, 0 );
-
-	pd3dImmediateContext->OMSetBlendState( g_pColorWritesOff, 0, 0xffffffff );
-	pd3dImmediateContext->RSSetState( g_pCullFront );
-
-	// Render the scene
-	g_Mesh.Render( pd3dImmediateContext, 0 );
-
-	pd3dImmediateContext->OMSetBlendState(g_pColorWritesOn, 0, 0xffffffff);
-	pd3dImmediateContext->RSSetState( g_pCullBack );
-
-	// reset the old viewport etc.
-	pd3dImmediateContext->RSSetScissorRects( 1, oldRects );
-	pd3dImmediateContext->RSSetViewports( 1, oldVp );
-}
-
 
 //--------------------------------------------------------------------------------------
 // Render the scene using the D3D11 device
@@ -658,14 +581,6 @@ void CALLBACK OnD3D11FrameRender( ID3D11Device* pd3dDevice, ID3D11DeviceContext*
 	pd3dImmediateContext->ClearRenderTargetView( pRTV, ClearColor );
 	pd3dImmediateContext->ClearDepthStencilView( pDSV, D3D11_CLEAR_DEPTH, 1.0, 0 );
 
-	D3DXMATRIXA16 mLightWorldView = *g_LightCamera.GetWorldMatrix() * *g_LightCamera.GetViewMatrix();
-	D3DXMATRIXA16 mLightWorldViewInv;
-	D3DXMatrixInverse( &mLightWorldViewInv, NULL, &mLightWorldView );
-
-	D3DXVECTOR4 vLightPos;
-	D3DXVECTOR3 vOrigin(0, 0, 0);
-	D3DXVec3Transform( &vLightPos, &vOrigin, &mLightWorldViewInv );
-
 	// Update constant buffers
 	HRESULT hr;
 	D3D11_MAPPED_SUBRESOURCE MappedResource;
@@ -673,8 +588,7 @@ void CALLBACK OnD3D11FrameRender( ID3D11Device* pd3dDevice, ID3D11DeviceContext*
 	CB_CONSTANTS* pConstants = ( CB_CONSTANTS* )MappedResource.pData;
 	pConstants->m_LightDiffuse = D3DXVECTOR4( 1.f, 1.f, 1.f, 1.f );
 	pConstants->m_mWorldViewProj = *g_Camera.GetWorldMatrix() * *g_Camera.GetViewMatrix() * *g_Camera.GetProjMatrix();
-	pConstants->m_mWorldViewProjLight = *g_LightCamera.GetWorldMatrix() * *g_LightCamera.GetViewMatrix() * *g_LightCamera.GetProjMatrix();
-	pConstants->m_vLightPos = vLightPos;
+	pConstants->m_vLightPos = D3DXVECTOR4( 9.0f, 14.0f, 9.0f, 1.0f );
 	pConstants->m_MaterialAmbientColor = D3DXVECTOR4( 0.2f, 0.2f, 0.2f, 1.0f );
 	pConstants->m_MaterialDiffuseColor = D3DXVECTOR4( 0.8f, 0.8f, 0.8f, 1.0f );
 	pConstants->m_fFilterWidth = 10.0f; // in texels
@@ -695,7 +609,6 @@ void CALLBACK OnD3D11FrameRender( ID3D11Device* pd3dDevice, ID3D11DeviceContext*
 	pd3dImmediateContext->VSSetConstantBuffers( 1, 1, &g_pcbFXAA );
 	pd3dImmediateContext->PSSetConstantBuffers( 1, 1, &g_pcbFXAA );
 
-
 	// Set render resources
 	pd3dImmediateContext->IASetInputLayout( g_pVertexLayout );
 
@@ -707,9 +620,6 @@ void CALLBACK OnD3D11FrameRender( ID3D11Device* pd3dDevice, ID3D11DeviceContext*
 	Offsets[0] = 0;
 	pd3dImmediateContext->IASetVertexBuffers( 0, 1, pVB, Strides, Offsets );
 	pd3dImmediateContext->IASetIndexBuffer( g_Mesh.GetIB11( 0 ), g_Mesh.GetIBFormat11( 0 ), 0 );
-
-	// Render shadowmap
-	RenderShadowMap( pd3dDevice, pd3dImmediateContext );
 
 	// Rebind to original back buffer and depth buffer
 	ID3D11RenderTargetView * pRTVs[2] = { pRTV, NULL };
@@ -726,15 +636,7 @@ void CALLBACK OnD3D11FrameRender( ID3D11Device* pd3dDevice, ID3D11DeviceContext*
 	ID3D11SamplerState * ppSamplerStates[4] = { g_pSamPointMirror, g_pSamLinearWrap, g_pSamPointCmpClamp, g_pSamBilinear };
 	pd3dImmediateContext->PSSetSamplers( 0, 4, ppSamplerStates );
 
-	// set the shadow map
-	ID3D11ShaderResourceView * ppResources[2] = { g_pDepthTextureSRV, g_pRandomRotTextureSRV };
-	pd3dImmediateContext->PSSetShaderResources( 1, 2, ppResources );
-
-	g_Mesh.Render( pd3dImmediateContext );
-
-	// reset shadowmap
-	ID3D11ShaderResourceView* pNULL = NULL;
-	pd3dImmediateContext->PSSetShaderResources( 1, 1, &pNULL );
+	g_Mesh.Render( pd3dImmediateContext, 0 );
 
 	// apply FXAA
 	if(g_fxaaEnabled)
@@ -759,7 +661,6 @@ void CALLBACK OnD3D11FrameRender( ID3D11Device* pd3dDevice, ID3D11DeviceContext*
 	}
 
 	DXUT_BeginPerfEvent( DXUT_PERFEVENTCOLOR, L"HUD / Stats" );
-	g_HUD.OnRender( fElapsedTime );
 	g_SampleUI.OnRender( fElapsedTime );
 	RenderText();
 	DXUT_EndPerfEvent();
@@ -795,7 +696,6 @@ void CALLBACK OnD3D11DestroyDevice( void* pUserContext )
 
 	g_Mesh.Destroy();
 
-	SAFE_RELEASE( g_pVertexShaderShadow );
 	SAFE_RELEASE( g_pVertexShader );
 	SAFE_RELEASE( g_pVertexShaderFXAA );
 	SAFE_RELEASE( g_pPixelShader );
@@ -858,7 +758,6 @@ void CALLBACK OnFrameMove( double fTime, float fElapsedTime, void* pUserContext 
 {
 	// Update the camera's position based on user input 
 	g_Camera.FrameMove( fElapsedTime );
-	g_LightCamera.FrameMove( fElapsedTime );
 }
 
 
@@ -881,16 +780,12 @@ LRESULT CALLBACK MsgProc( HWND hWnd, UINT uMsg, WPARAM wParam, LPARAM lParam, bo
 	}
 
 	// Give the dialogs a chance to handle the message first
-	*pbNoFurtherProcessing = g_HUD.MsgProc( hWnd, uMsg, wParam, lParam );
-	if( *pbNoFurtherProcessing )
-		return 0;
 	*pbNoFurtherProcessing = g_SampleUI.MsgProc( hWnd, uMsg, wParam, lParam );
 	if( *pbNoFurtherProcessing )
 		return 0;
 
 	// Pass all remaining windows messages to camera so it can respond to user input
 	g_Camera.HandleMessages( hWnd, uMsg, wParam, lParam );
-	g_LightCamera.HandleMessages( hWnd, uMsg, wParam, lParam );
 
 	return 0;
 }
